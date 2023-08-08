@@ -1,0 +1,637 @@
+---
+title: "Best Ball Data Bowl Submission"
+subtitle: "Analyzing Early Draft Strategies"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyverse)
+
+getDataParts <- function(path,nParts){
+  data <- tibble()
+  for (i in seq(nParts)) {
+    data <- bind_rows(data,read_csv(paste0(path,"part_",
+                                           if_else(i-1<10,paste0(0,i-1),paste0(i-1)),
+                                           ".csv"
+                                           )
+                                    )
+                      )
+  }
+  return(data)
+}
+
+data20 <- read_csv("data/2020/part_00.csv")
+# 
+# 
+# finals_21 <- read_csv("data/2021/post_season/finals.csv")
+# quarterfinals_21 <- read_csv("data/2021/post_season/quarterfinals.csv")
+# semifinals_21 <- read_csv("data/2021/post_season/semifinals.csv")
+# 
+
+reg_21 <-getDataParts(path="data/2021/regular_season/",6)
+
+fast_22<-getDataParts("data/2022/regular_season/fast/",27)
+mix_22 <- getDataParts("data/2022/regular_season/mixed/",9)
+
+# finals_22 <- read_csv("data/2022/post_season/finals/part_00.csv")
+# semis_22 <- read_csv("data/2022/post_season/semifinals/part_00.csv")
+quarters_22 <- getDataParts(path="data/2022/post_season/quarterfinals/",3)
+
+
+
+
+
+```
+
+```{r}
+length(unique(fast_22$draft_entry_id))
+length(unique(fast_22$draft_id))
+length(unique(fast_22$tournament_entry_id))
+```
+
+
+```{r}
+playoffTeamsBBMIII <- unique(quarters_22$tournament_entry_id)
+fast_22 <- fast_22 %>% mutate(draftType = "fast",
+                              playoff_team = if_else(tournament_entry_id%in%playoffTeamsBBMIII, 1,0)) 
+mix_22 <- mix_22%>%mutate(draftType = "slow",
+                              playoff_team = if_else(tournament_entry_id%in%playoffTeamsBBMIII, 1,0))
+
+#drafts_22 <- bind_rows(fast_22,mix_22)
+
+fast_22 %>%
+  group_by(tournament_entry_id)%>%
+  summarize(playoff_team=max(playoff_team))%>%
+  ungroup()%>%
+  group_by(playoff_team)%>%
+  summarise(n())
+
+mix_22 %>%
+  group_by(tournament_entry_id)%>%
+  summarize(playoff_team=max(playoff_team))%>%
+  ungroup()%>%
+  group_by(playoff_team)%>%
+  summarise(n())
+
+#18772+6298=25070 it works
+
+draft_22 <- bind_rows(fast_22,mix_22) %>%
+  mutate(pickRd = ceiling(overall_pick_number/12))
+```
+
+adp and average round of different draft positions for 0 rb strategies
+```{r}
+posDraftSummary<-draft_22 %>%
+  group_by(tournament_entry_id,position_name) %>%
+  summarize(avgPosPickNum = mean(overall_pick_number)  ,
+            avgPosPickRd = mean(pickRd)  ,
+            sumPickNum = sum(overall_pick_number),
+            sumPickRd = sum(pickRd),
+            totalDrafted = n(),
+            meanPosPoints = mean(pick_points),
+            totalPosPoints = sum(pick_points),
+            totalTeamPoints = max(roster_points),
+            pointsRatio = totalPosPoints/totalTeamPoints
+            )
+
+
+qbPtHis <- posDraftSummary %>% filter(position_name == 'QB') %>% ggplot() +
+  geom_freqpoly(aes(x=totalPosPoints,y=..count../sum(..count..))
+                , linewidth = 1, color = "darkgreen") + 
+  ggtitle("QB")+
+  theme_bw()+
+  labs(x="Total Points Contributed", y = "Frequency")
+
+wrPtHis <- posDraftSummary %>% filter(position_name == 'RB') %>% ggplot() +   
+  geom_freqpoly(aes(x=totalPosPoints,y=..count../sum(..count..))
+                , linewidth = 1, color = "darkgreen")+ 
+  ggtitle("RB")+
+  theme_bw()+
+  labs(x="Total Points Contributed", y = "Frequency")
+
+rbPtHis <- posDraftSummary %>% filter(position_name == 'WR') %>% ggplot() + 
+  geom_freqpoly(aes(x=totalPosPoints, y=..count../sum(..count..))
+                , linewidth = 1, color = "darkgreen") +
+  ggtitle("WR")+
+  theme_bw()+
+  labs(x="Total Points Contributed", y = "Frequency")
+
+tePtHis <- posDraftSummary %>% filter(position_name == 'TE') %>% ggplot() + 
+  geom_freqpoly(aes(x=totalPosPoints, y=..count../sum(..count..))
+                , linewidth = 1, color = "darkgreen") +
+  ggtitle("TE") +
+  labs(x="Total Points Contributed", y = "Frequency")+
+  theme_bw()
+
+fig1<-ggpubr::ggarrange(qbPtHis,wrPtHis,rbPtHis,tePtHis)
+fig1
+
+wrVrb<-posDraftSummary %>% filter(position_name == 'RB'| position_name == 'WR') %>% ggplot() +   
+  geom_freqpoly(aes(x=totalPosPoints,y=..count../sum(..count..), color = position_name)
+                , linewidth = 1)+ 
+  ggtitle("RB vs WR")+
+  theme_bw()+
+  labs(x="Total Points Contributed", y = "Frequency")
+
+```
+
+```{r}
+posDraftSummary %>%
+  filter(position_name == "RB")%>%
+  ggplot(aes(y = totalTeamPoints, x = avgPosPickRd)) +
+  geom_point() +
+  geom_smooth()
+```
+```{r}
+earlyDraftStrat<-draft_22%>%
+  filter(team_pick_number <=5) %>%
+  group_by(tournament_entry_id)%>%
+  mutate(firstRbRd = if_else(position_name == "RB", team_pick_number, 100),
+         firstRbPk = if_else(position_name == "RB", overall_pick_number, 10000),
+         firstRbRd = min(firstRbRd),
+         firstRbPk = min(firstRbPk)
+         ) %>%
+  ungroup()%>%
+  pivot_wider(id_cols = c(tournament_entry_id, 
+                          roster_points, playoff_team,firstRbRd,firstRbPk ),
+              names_from = team_pick_number,
+              values_from = c(position_name, overall_pick_number)
+  )%>%
+  mutate(
+    positonOrder = paste0(position_name_1,"_", position_name_2,"_",position_name_3,"_",position_name_4,"_",
+                     position_name_5),
+    pickNumOrder = paste0(overall_pick_number_1,"_",overall_pick_number_2,"_",overall_pick_number_3,"_",
+                     overall_pick_number_4,"_",overall_pick_number_5)
+    )%>%
+  select(-c(matches("[0-9]$")))
+```
+
+
+```{r}
+earlyDraftStrat <- earlyDraftStrat %>%
+  mutate(
+    noRB = if_else(firstRbRd == 100,1,0),
+    rbCt = str_count(positonOrder,"RB"),
+    qbCt = str_count(positonOrder,"QB"),
+    wrCt = str_count(positonOrder,"WR"),
+    goodTE = if_else(str_detect(positonOrder, "TE"),1,0),
+    noTE = if_else(str_detect(positonOrder, "TE"),0,1),
+    heavyRB = if_else(rbCt >2,1,0),
+    twoQB = if_else(qbCt>1,1,0),
+    noQB = if_else(str_detect(positonOrder,"QB"),0,1),
+    regRG = if_else(rbCt == 1 | rbCt == 2,1,0),
+    noWR = if_else(wrCt == 0,1,0),
+    regWR = if_else(wrCt == 1| wrCt == 2 ,1,0),
+    heavyWR = if_else(wrCt >2,1,0),
+    noRB2QB = noRB*twoQB
+  )
+
+noRBHist<-earlyDraftStrat %>%
+  filter(noRB==1)%>%
+  ggplot()+
+  geom_freqpoly(aes(x=roster_points,y=..count../sum(..count..)))+
+  ggtitle("0 RB")+
+  scale_x_continuous(limits=c(1000,2000))+
+  labs(x="Roster Points")
+
+
+playoffHist <- earlyDraftStrat %>%
+  filter(playoff_team==1)%>%
+  ggplot()+
+  geom_freqpoly(aes(x=roster_points,y=..count../sum(..count..)))+
+  ggtitle("Playoff Teams")+
+  scale_x_continuous(limits=c(1000,2000))+
+  labs(x="Roster Points")
+
+
+allPoints <- earlyDraftStrat %>%
+  ggplot()+
+  geom_freqpoly(aes(x=roster_points,y=..count../sum(..count..)))+
+  ggtitle("All Teams")+
+  scale_x_continuous(limits=c(1000,2000))+
+  labs(x="Roster Points")
+
+
+
+ggpubr::ggarrange(playoffHist,allPoints,ncol=1)
+
+hRBHist <- earlyDraftStrat %>%
+  filter(heavyRB==1)%>%
+  ggplot()+
+  geom_freqpoly(aes(x=roster_points,y=..count../sum(..count..)))+
+  ggtitle("Heavy RB")+
+  scale_x_continuous(limits=c(1000,2000))+
+  labs(x="Roster Points")
+
+
+twoQBHist <- earlyDraftStrat %>%
+  filter(twoQB==1)%>%
+  ggplot()+
+  geom_freqpoly(aes(x=roster_points,y=..count../sum(..count..)))+
+  ggtitle("2 QB")+
+  scale_x_continuous(limits=c(1000,2000))+
+  labs(x="Roster Points")
+
+
+noQBHist <- earlyDraftStrat %>%
+  filter(noQB==1)%>%
+  ggplot()+
+  geom_freqpoly(aes(x=roster_points,y=..count../sum(..count..)))+
+  ggtitle("0 QB")+
+  scale_x_continuous(limits=c(1000,2000))+
+  labs(x="Roster Points")
+
+ggpubr::ggarrange(noRBHist,hRBHist,twoQBHist,noQBHist)
+
+```
+
+```{r}
+pfPicks<-draft_22%>%
+  filter(playoff_team == 1)%>%
+  ggplot() +
+  geom_bar(aes(x=pick_order, y = ..count../sum(..count..)), binwidth = 1, fill = "darkgreen", color = "black")+
+    labs(title = 'Pick Order Distribution for Playoff Teams',
+         x='Pick Order',
+         y = '')+
+  scale_x_binned(limits = c(0,12))+
+  theme_bw()
+
+pfPicks
+```
+
+```{r}
+
+
+stategySuccsess<- earlyDraftStrat%>%
+  summarise(
+    
+    noRBYoffRate = sum(noRB*playoff_team)/sum(noRB),
+    noRBRate = sum(noRB)/n(),
+    noRBMeanPts = sum(noRB*roster_points)/sum(noRB),
+    
+    goodTEYoffRate = sum(goodTE*playoff_team)/sum(goodTE),
+    goodTERate = sum(goodTE)/n(),
+    goodTEMeanPts = sum(goodTE*roster_points)/sum(goodTE),
+    
+    heavyRBYoffRate = sum(heavyRB*playoff_team)/sum(heavyRB),
+    heavyRBRate = sum(heavyRB)/n(),
+    heavyRBMeanPts = sum(heavyRB*roster_points)/sum(heavyRB),
+    
+    twoQBYoffRate = sum(twoQB*playoff_team)/sum(twoQB),
+    twoQBRate = sum(twoQB)/n(),
+    twoQBMeanPts = sum(twoQB*roster_points)/sum(twoQB),
+    
+    noQBRate = sum(noQB)/n(),
+    noQBYoffRate = sum(noQB*playoff_team)/sum(noQB),
+    noQBMeanPts = sum(noQB*roster_points)/sum(noQB),
+    
+    noTERate = sum(noTE)/n(),
+    noTEYoffRate = sum(noTE*playoff_team)/sum(noTE),
+    noTEMeanPts = sum(noTE*roster_points)/sum(noTE),
+    
+    noRB2QBRate = sum(noRB*twoQB)/n(),
+    noRB2QBYoffRate = sum(noRB*twoQB*playoff_team)/sum(noRB*twoQB),
+    noRB2QBMeanPts = sum(noRB*twoQB*roster_points)/sum(noRB*twoQB),
+    
+   
+      
+    regRBRate=sum(regRG)/n(),
+    regRBYoffRate = sum(regRG*playoff_team)/sum(regRG),
+    regRBMeanPts = sum(regRG*roster_points)/sum(regRG),
+    
+    noWRYoffRate = sum(noWR*playoff_team)/sum(noWR),
+    noWRRate = sum(noWR)/n(),
+    noWRMeanPts = sum(noWR*roster_points)/sum(noWR),
+    
+    regWRYoffRate = sum(regWR*playoff_team)/sum(regWR),
+    regWRRate = sum(regWR)/n(),
+    regWRMeanPts = sum(regWR*roster_points)/sum(regWR),
+    
+    heavyWRYoffRate = sum(heavyWR*playoff_team)/sum(heavyWR),
+    heavyWRRate = sum(heavyWR)/n(),
+    heavyWRMeanPts = sum(heavyWR*roster_points)/sum(heavyWR),
+    
+     baseYoffRate = sum(playoff_team)/n(),
+    base_meanPts = mean(roster_points),
+  )
+```
+
+
+
+```{r}
+rates<- stategySuccsess %>%
+  select(-contains("Yoff"),-contains("MeanPts"))%>%
+  pivot_longer(
+    cols = everything()
+  )%>%
+  bind_rows(tibble(a=0,b=0))#need 1 extra to bind
+
+yoffs <-stategySuccsess %>%
+  select(contains("Yoff"))%>%
+  pivot_longer(
+    cols = everything()
+  )
+
+meanPts = stategySuccsess %>%
+  select(contains("MeanPts"))%>%
+  pivot_longer(
+    cols = everything()
+)#need 1 extra to bind
+
+strategies_df <- bind_cols(rates,yoffs$value, meanPts$value)%>%
+  select(-c(a,b))%>%
+  mutate(name = if_else(is.na(name),'base',name))%>%
+  rename('strategy' = name,
+         "freq" = value, 
+         "yoff_rate" = ...5,
+         "mean_roster_pts" = ...6)%>%
+  mutate(
+    strategy = str_remove(strategy,"Rate"),
+    totalObs = nrow(earlyDraftStrat)
+  )
+
+library(gt)
+table1 <- strategies_df%>%
+  filter(strategy!="base")%>%
+  arrange(desc(mean_roster_pts))%>%
+  mutate(playoffTeams = yoff_rate*totatStrategyObs)%>%
+  select(strategy,mean_roster_pts,yoff_rate,playoffTeams,freq,totatStrategyObs,totalObs)%>%
+  gt()%>%
+  cols_hide(totalObs)%>%
+  fmt_percent(columns = c(freq,yoff_rate))%>%
+  fmt_number(columns = mean_roster_pts)%>%
+  tab_header(title = "Best Ball Early Draft Strategies Success",
+             subtitle = "From the 2022 Underdog Sports Best Ball Mania III")%>%
+  cols_label(
+    strategy = "Strategy",
+    totatStrategyObs = "Total Drafters",
+    freq = "Frequency",
+    playoffTeams = "Playoff Teams",
+    yoff_rate = "Playoff Percentage",
+    mean_roster_pts = "Average Total Points"
+  )%>%
+  opt_stylize( style = 3, color = "green")
+as_raw_html(table1)
+```
+
+join with fastR data
+drafted rookies
+```{r}
+library(nflverse)
+currentRosters<-nflreadr::load_rosters()
+
+draftPlayerSum <- draft_22 %>%
+  group_by(player_name,position_name)%>%
+  summarise(
+    earlyPickRd = min(pickRd),
+    latePickRd = max(pickRd),
+    adpRd = mean(pickRd),
+    pfTmRate = sum(playoff_team)/n(),
+    avgPickPt = mean(pick_points),
+    ADP = mean(overall_pick_number),
+    earlyPickNum = min(overall_pick_number),
+    latePickNum = max(overall_pick_number),
+    totalpicks = n()
+  )
+
+rookieDraftSummary<-currentRosters%>%
+  filter(rookie_year == 2022) %>%
+  select(full_name,birth_date,college,status_description_abbr,draft_number)%>%
+  inner_join(draftPlayerSum, by = c("full_name" =  "player_name"))
+```
+
+```{r}
+rookieDraftSummary%>%
+  ggplot(aes(x = ADP, y = avgPickPt))+
+  geom_point(aes(color = position_name))+
+  ggrepel::geom_label_repel(
+    data = rookieDraftSummary[rookieDraftSummary$avgPickPt>75,],
+    aes(label = full_name)) +
+  ggrepel::geom_label_repel(
+    data = rookieDraftSummary[rookieDraftSummary$avgPickPt<50 &
+                              rookieDraftSummary$ADP<115,],
+    aes(label = full_name))
+
+
+  posAvgs <- draftPlayerSum%>%
+    group_by(position_name)%>%
+    summarise(mean(avgPickPt))
+```
+
+```{r}
+draftPlayerSum21_22 <- draft_22 %>%
+  bind_rows(reg_21)%>%
+  mutate(year = year(draft_time))%>%
+  filter(tournament_round_number == 1)%>%
+  group_by(player_name,position_name,year)%>%
+  summarise(
+    earlyPickRd = min(team_pick_number),
+    latePickRd = max(team_pick_number),
+    adpRd = mean(team_pick_number),
+    pfTmRate = sum(playoff_team)/n(),
+    avgPickPt = mean(pick_points),
+    ADP = mean(overall_pick_number),
+    earlyPickNum = min(overall_pick_number),
+    latePickNum = max(overall_pick_number),
+    totalpicks = n()
+  )
+```
+
+
+```{r}
+rookieDraftSummary21_22<-currentRosters%>%
+  filter(rookie_year == 2022 | rookie_year ==2021) %>%
+  select(full_name,birth_date,college,status_description_abbr,draft_number,rookie_year)%>%
+  inner_join(draftPlayerSum21_22, by = c("full_name" =  "player_name", "rookie_year" = "year"))
+```
+
+```{r}
+rookieDraftSummary21_22%>%
+  ggplot(aes(x = ADP, y = avgPickPt))+
+  geom_point(aes(color = position_name))+
+  ggrepel::geom_label_repel(
+    data = rookieDraftSummary21_22[rookieDraftSummary21_22$avgPickPt>75,],
+    aes(label = full_name))
+```
+load necessities for analyzing incoming rookies
+```{r}
+depth_charts2122<-load_depth_charts(2021:2022) %>%
+  filter(week == 1)
+
+
+
+nfl_draft_2122 <- load_draft_picks() %>%
+  filter(season == 2021 | season == 2022,side == "O") %>%
+  left_join(load_combine(),
+            by = c('pfr_id' = 'pfr_id',
+                   'pfr_name' = 'player_name'),
+            suffix = c('_draft','_combine')) %>%
+  left_join(depth_charts2122, by = c('pfr_name' = 'full_name',
+                                      'season_draft' = 'season'))%>%
+  filter(formation == "Offense")%>%
+  select(season_draft,team,round,pick,pfr_name,category,school,ht,wt,forty,vertical,shuttle,cone,depth_team)
+
+
+```
+
+```{r}
+set.seed(17)
+rookie_predictor_draft<-rookieDraftSummary21_22 %>%
+  left_join(nfl_draft_2122, by = c('full_name' = 'pfr_name')) %>%
+  filter(totalpicks>50)%>%
+  bind_cols(dummy_cols(rookie_predictor_draft$position_name, remove_first_dummy =T ))%>%
+  select(-30)%>%
+  mutate(depth_team = as.numeric(depth_team),
+         depth_team = if_else(is.na(depth_team),4,depth_team))
+
+simpleRookieLM<-lm(avgPickPt~ADP
+                     +position_name,
+                   data = rookie_predictor_draft)
+summary(simpleRookieLM)
+#plot(simpleRookieLM)
+
+```
+
+mock draft sim
+```{r}
+library(tidymodels)
+set.seed(19)
+split_strategy <- initial_split(earlyDraftStrat,.75)
+training = training(split_strategy)
+testing=testing(split_strategy)
+
+draftStratLM_1<-lm(roster_points~poly(firstRbPk,2)+noRB+noTE+heavyRB+
+    twoQB+noQB+noWR+heavyWR+noRB2QB,
+   data = training)
+summary(draftStratLM_1)
+
+lm_pred_1 <- predict(draftStratLM_1,testing)
+
+
+rf_draftStrat_1<-randomForest::randomForest(roster_points~firstRbPk+rbCt+wrCt+qbCt+noRB+noTE+heavyRB+
+    twoQB+noQB+noWR+heavyWR+noRB2QB,
+   data = earlyDraftStrat)
+
+rf_draftStrat_1
+```
+
+```{r}
+rf_draftStrat_1$forest
+```
+
+```{r}
+
+
+logit_draftStrat_1<-glm(playoff_team~noRB+noTE+heavyRB+
+    twoQB+noQB+noWR+heavyWR+noRB2QB,
+   data = training,
+   family = binomial)
+summary(logit_draftStrat_1)
+
+
+logit_pred_1 <- predict(logit_draftStrat_1,testing, type = "response")
+
+caret::confusionMatrix(as.factor(testing$playoff_team),
+                      as.factor(if_else((logit_pred_1)>0.05556294,1,0)))
+#decimal is percent of all teams that make the post
+```
+
+```{r}
+plot_df <- bind_cols(testing$playoff_team,logit_pred_1)%>%
+  rename("actual"=...1 , "pred"=...2) %>% 
+  mutate(bin_pred_prob = round(pred/.01)*.01)%>%
+  group_by(bin_pred_prob)%>%
+  summarise(n_entries = n(),
+            n_playoff_teams = length(which(actual==1)),
+            bin_act_prob = n_playoff_teams/n_entries,
+  )%>%
+  ungroup()
+
+cal_plot<-plot_df %>%
+  ggplot() +
+  geom_point(aes(x = bin_pred_prob, y = bin_act_prob, size = n_entries)) +
+  geom_smooth(aes(x = bin_pred_prob, y = bin_act_prob), method = "loess", color = "darkgreen") +
+  geom_abline(slope = 1, intercept = 0, color = "black", lty = 2) +
+  coord_equal() +
+  scale_x_continuous(limits = c(0, .12),) +
+  scale_y_continuous(limits = c(0, .12)) +
+  labs(
+    size = "Number of games",
+    x = "Estimated Playoff Probability",
+    y = "Observed Playoff Probability",
+    title = "Best Ball Strategy Playoff Odds Calibration Plot"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.text.x = element_text(size = 10, angle = 90),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.position = "bottom"
+  )
+cal_plot
+```
+
+
+
+
+```{r}
+plot_df <- bind_cols(testing$roster_points,lm_pred_1)%>%
+  rename("actual"=...1 , "pred"=...2) %>% 
+  mutate(bin_pred_pts = round(pred/10)*10)%>%
+  group_by(bin_pred_pts)%>%
+  summarise(bin_act_pts = mean(actual),
+            n_entries = n()
+  )%>%
+  ungroup()
+
+cal_plot<-plot_df %>%
+  ggplot() +
+  geom_point(aes(x = bin_pred_pts, y = bin_act_pts, size = n_entries)) +
+  geom_smooth(aes(x = bin_pred_pts, y = bin_act_pts), method = "loess", color = "darkgreen") +
+  geom_abline(slope = 1, intercept = 0, color = "black", lty = 2) +
+  coord_equal() +
+  scale_x_continuous(limits = c(1425, 1600),) +
+  scale_y_continuous(limits = c(1425, 1600)) +
+  labs(
+    size = "Number of games",
+    x = "Estimated Roster Points",
+    y = "Observed Roster Points",
+    title = "Best Ball Strategy Roster Points Calibration Plot"
+  ) +
+  theme_bw() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    strip.background = element_blank(),
+    strip.text = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.text.x = element_text(size = 10, angle = 90),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.position = "bottom"
+  )
+cal_plot
+```
+ff time
+```{r}
+bb_No_Rb_league <- ffsimulator::sleeper_connect(league_id=989632752473464832,
+                             user_name = 'skrrrch')
+
+bb_No_Rb_league_sim<-ffsimulator::ff_simulate(bb_No_Rb_league,best_ball = T,seed=11,
+                                              pos_filter = c("QB","RB","WR","TE"))
+bb_No_Rb_league_sim$summary_week$franchise_name = if_else(is.na(bb_No_Rb_league_sim$summary_week$franchise_name),
+                                                           bb_No_Rb_league_sim$summary_week$franchise_id,
+                                                           bb_No_Rb_league_sim$summary_week$franchise_name)
+library(ggridges)
+plot(bb_No_Rb_league_sim, type = "points")
+
+```
+
+
